@@ -405,3 +405,19 @@ Free :: proc(ptr: rawptr, allocator: ^Allocator) {
         free(ptr, allocator._allocator)
     }
 }
+
+/*
+DeleteAllocator frees all memory associated with the allocator and its slabs.
+This includes all NUMERIC, STRING, and BOOL blocks, as well as the allocator itself.
+
+@param allocator - pointer to the allocator to delete
+*/
+DeleteAllocator :: proc(allocator: ^Allocator) {
+    if allocator.is_thread_safe {
+        // thread-safe: frees all allocated blocks and the mutex
+        delete_neutron_allocator_threadsafe(allocator._threadsafe_allocator)
+    } else {
+        // non-thread-safe: frees all allocated blocks
+        delete_neutron_allocator(allocator._allocator)
+    }
+}
