@@ -420,4 +420,5 @@ DeleteAllocator :: proc(allocator: ^Allocator) {
         // non-thread-safe: frees all allocated blocks
         delete_neutron_allocator(allocator._allocator)
     }
+    runtime.free(allocator)
 }
