@@ -71,43 +71,51 @@ alloc :: proc(t: DataType, size: int, allocator: ^NeutronAllocator) -> rawptr {
     return ptr
 }
 
-// ----------------------------
-// Reallocate an existing block
-// ----------------------------
 @(no_sanitize_address, no_sanitize_memory, require_results, private)
 realloc :: proc(old_ptr: rawptr, new_size: int, allocator: ^NeutronAllocator) -> rawptr {
+    // find object first
+    found := false
+    obj_index := 0
+    for obj, i in allocator.allocated_objs {
+        if obj.data_ptr == old_ptr {
+            found = true
+            obj_index = i
+            break
+        }
+    }
+    if !found {
+        // old_ptr not managed by this allocator - signal error (panic or return nil)
+        panic("NEUTRON_ALLOCATOR.REALLOC.FAIL.UNKNOWN_PTR")
+    }
+
+    // allocate new block
     new_ptr := runtime.heap_alloc(new_size)
     if new_ptr == nil {
         panic("NEUTRON_ALLOCATOR.REALLOC.FAIL.GOT_NIL_PTR")
     }
 
-    for obj, i in allocator.allocated_objs {
-        if obj.data_ptr == old_ptr {
-            // copy only up to the smaller of the old and new sizes
-            copy_size := obj.size < new_size ? obj.size : new_size
-            runtime.mem_copy(new_ptr, old_ptr, copy_size)
+    // safe to copy/update now
+    old_obj := allocator.allocated_objs[obj_index]
+    copy_size := old_obj.size < new_size ? old_obj.size : new_size
+    runtime.mem_copy(new_ptr, old_ptr, copy_size)
 
-            allocator.allocated_objs[i].data_ptr = new_ptr
-            allocator.allocated_objs[i].size = new_size
+    allocator.allocated_objs[obj_index].data_ptr = new_ptr
+    allocator.allocated_objs[obj_index].size = new_size
 
-            slab: ^[dynamic]rawptr
-            switch obj.type {
-            case .NUMERIC: slab = &allocator.numbers
-            case .STRING:  slab = &allocator.strings
-            case .BOOL:    slab = &allocator.bools
-            }
-            for j := 0; j < len(slab); j += 1 {
-                if slab[j] == old_ptr {
-                    slab[j] = new_ptr
-                    break
-                }
-            }
-
-            runtime.heap_free(old_ptr)
+    slab: ^[dynamic]rawptr
+    switch old_obj.type {
+    case .NUMERIC: slab = &allocator.numbers
+    case .STRING:  slab = &allocator.strings
+    case .BOOL:    slab = &allocator.bools
+    }
+    for j := 0; j < len(slab); j += 1 {
+        if slab[j] == old_ptr {
+            slab[j] = new_ptr
             break
         }
     }
 
+    runtime.heap_free(old_ptr)
     return new_ptr
 }
 
@@ -225,39 +233,50 @@ realloc_threadsafe :: proc(old_ptr: rawptr, new_size: int, allocator: ^NeutronAl
     sync.lock(allocator._mutex)
     defer sync.unlock(allocator._mutex)
 
+    // find object first while holding the lock
+    found := false
+    obj_index := 0
+    for obj, i in allocator.allocated_objs {
+        if obj.data_ptr == old_ptr {
+            found = true
+            obj_index = i
+            break
+        }
+    }
+    if !found {
+        panic("NEUTRON_ALLOCATOR.THREADSAFE.REALLOC.FAIL.UNKNOWN_PTR")
+    }
+
+    // allocate new block (still holding mutex to keep semantics simple and safe)
     new_ptr := runtime.heap_alloc(new_size)
     if new_ptr == nil {
         panic("NEUTRON_ALLOCATOR.THREADSAFE.REALLOC.FAIL")
     }
 
-    for obj, i in allocator.allocated_objs {
-        if obj.data_ptr == old_ptr {
-            copy_size := obj.size < new_size ? obj.size : new_size
-            runtime.mem_copy(new_ptr, old_ptr, copy_size)
+    old_obj := allocator.allocated_objs[obj_index]
+    copy_size := old_obj.size < new_size ? old_obj.size : new_size
+    runtime.mem_copy(new_ptr, old_ptr, copy_size)
 
-            allocator.allocated_objs[i].data_ptr = new_ptr
-            allocator.allocated_objs[i].size = new_size
+    allocator.allocated_objs[obj_index].data_ptr = new_ptr
+    allocator.allocated_objs[obj_index].size = new_size
 
-            slab: ^[dynamic]rawptr
-            switch obj.type {
-            case .NUMERIC: slab = &allocator.numbers
-            case .STRING:  slab = &allocator.strings
-            case .BOOL:    slab = &allocator.bools
-            }
-            for j := 0; j < len(slab); j += 1 {
-                if slab[j] == old_ptr {
-                    slab[j] = new_ptr
-                    break
-                }
-            }
-
-            runtime.heap_free(old_ptr)
+    slab: ^[dynamic]rawptr
+    switch old_obj.type {
+    case .NUMERIC: slab = &allocator.numbers
+    case .STRING:  slab = &allocator.strings
+    case .BOOL:    slab = &allocator.bools
+    }
+    for j := 0; j < len(slab); j += 1 {
+        if slab[j] == old_ptr {
+            slab[j] = new_ptr
             break
         }
     }
 
+    runtime.heap_free(old_ptr)
     return new_ptr
 }
+
 
 // ----------------------------
 // Thread-safe free
